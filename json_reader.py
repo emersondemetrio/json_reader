@@ -1,7 +1,7 @@
 import os
 import sys
 import json
-from typing import Any, Dict, List, Union, TypedDict, NewType
+from typing import Any, Dict, List, Union, NewType
 
 EXIT_CODES = [0, "q", "Q"]
 JSON_INDENTATION: int = 4
@@ -12,20 +12,10 @@ JsonData = Dict[str, JsonValue]
 JsonLike = Union[JsonData, List[Any]]
 
 
-class KeyValuePair(TypedDict):
-    path: Path
-    value: JsonValue
-
-
-KeyValueMap = List[KeyValuePair]
-
-
 def exit_if(condition: bool, message: str) -> None:
-    if not condition:
-        return
-
-    print(message)
-    sys.exit(1)
+    if condition:
+        print(message)
+        sys.exit(1)
 
 
 def get_json_data(file_name: str) -> JsonData:
@@ -38,37 +28,32 @@ def save_json_file(file_name: str, data: JsonData) -> None:
         json.dump(data, file_content, indent=JSON_INDENTATION)
 
 
-def key_exists(kv_map: KeyValueMap, prop: int) -> bool:
-    return prop - 1 in range(len(kv_map))
+def flatten_json(data: JsonLike, prefix: str = "") -> Dict[str, JsonValue]:
+    result = {}
+    if isinstance(data, dict):
+        for key, value in data.items():
+            new_key = f"{prefix}{key}" if prefix else key
+            if isinstance(value, (dict, list)):
+                result.update(flatten_json(value, f"{new_key}."))
+            else:
+                result[new_key] = value
+    elif isinstance(data, list):
+        for i, item in enumerate(data):
+            new_key = f"{prefix}{i}"
+            if isinstance(item, (dict, list)):
+                result.update(flatten_json(item, f"{new_key}."))
+            else:
+                result[new_key] = item
+    else:
+        result[prefix.rstrip(".")] = data
+    return result
 
 
-def get_key_value_property_map(
-    path: Path, json_data: JsonLike, ref: KeyValueMap = []
-) -> KeyValueMap:
-    for key_name, value in json_data.items():
-        if isinstance(key_name, list):
-            for i, item in enumerate(value):
-                get_key_value_property_map(
-                    (path + "." if path != "" else "") + key_name + " " + str(i), item
-                )
-        elif isinstance(value, dict):
-            get_key_value_property_map(
-                (path + "." if path != "" else "") + key_name, value
-            )
-        else:
-            cur_path = path + "." + key_name if path != "" else key_name
-            ref.append({"path": cur_path, "value": value})
-    return ref
-
-
-def show_json_properties(kv_map: KeyValueMap) -> str:
+def show_json_properties(flattened: Dict[str, JsonValue]) -> str:
     print("\n[Available properties] \n")
-
-    for idx, act in enumerate(kv_map, start=1):
-        print(f"Code: {idx}\t | {act['path']} = {act['value']}")
-
+    for idx, (path, value) in enumerate(flattened.items(), start=1):
+        print(f"Code: {idx}\t | {path} = {value}")
     print("\nEXIT = 0")
-
     return input("\nEnter a code to edit: ")
 
 
@@ -76,40 +61,49 @@ def update_json_property(
     data: JsonData, property_path: List[str], value: JsonValue
 ) -> JsonData:
     if len(property_path) == 1:
-        key = property_path[0] # ['outer_1'] -> 'outer_1'
-        data[key] = value
-
+        data[property_path[0]] = value
         return data
-
-    return update_json_property(data[property_path[0]], property_path[1:], value)
+    key = property_path[0]
+    if key not in data:
+        data[key] = {}
+    data[key] = update_json_property(data[key], property_path[1:], value)
+    return data
 
 
 def update_json(data: JsonData, property_path: Path, value: JsonValue) -> JsonData:
-    updated = update_json_property(data, property_path.split("."), value)
-    print("updated", updated)
+    return update_json_property(data, property_path.split("."), value)
 
-    return updated
 
 def print_json(data: JsonData) -> None:
     print(json.dumps(data, indent=JSON_INDENTATION))
 
+
 def main() -> None:
+    exit_if(len(sys.argv) < 2, "Please provide a JSON file path as an argument.")
     file_path: str = sys.argv[1]
     exit_if(not os.path.exists(file_path), f"File {file_path} does not exist.")
 
     json_data: JsonData = get_json_data(file_path)
 
     while True:
-        kv_map = get_key_value_property_map(Path(""), json_data)
+        flattened = flatten_json(json_data)
+        prop = show_json_properties(flattened)
 
-        prop = show_json_properties(kv_map)
+        if prop in EXIT_CODES:
+            print("Bye.")
+            break
 
-        exit_if(prop in EXIT_CODES, "Bye.")
+        try:
+            prop = int(prop)
+        except ValueError:
+            print("Invalid input. Please enter a number.")
+            continue
 
-        prop = int(prop)
-        exit_if(not key_exists(kv_map, prop), "Invalid code.")
+        if prop < 1 or prop > len(flattened):
+            print("Invalid code.")
+            continue
 
-        property_path: Path = kv_map[prop - 1]["path"]
+        property_path = list(flattened.keys())[prop - 1]
         new_value: str = input(
             f"Editing value for '{property_path}'\n\n"
             + "Value (press enter to finish): "
@@ -117,10 +111,12 @@ def main() -> None:
 
         json_data = update_json(json_data, property_path, new_value)
         save_json_file(file_path, json_data)
+        print("JSON updated successfully.")
+
 
 if __name__ == "__main__":
     try:
         main()
     except KeyboardInterrupt:
-        sys.exit(0)
         print("\nBye.")
+        sys.exit(0)
